@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -7,6 +8,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -121,8 +123,6 @@ namespace JatyzxBooking
             if (!client.DefaultRequestHeaders.Contains("Cookie"))
                 client.DefaultRequestHeaders.Add("Cookie", txtCookie.Text.Trim());
 
-            
-
             if (string.IsNullOrEmpty(courtDate))
             {
                 var date = DateTime.Today;
@@ -148,20 +148,26 @@ namespace JatyzxBooking
 
         private async void Button_Click_1(object sender, RoutedEventArgs e)
         {
-            btnCreateOrder.IsEnabled = false;
+            //btnCreateOrder.IsEnabled = false;
 
             try
             {
+                if (cbbVenue.SelectedItem == null || cbbStartTime.SelectedItem == null)
+                {
+                    txtLog.AppendText("Please select a court and a time" + Environment.NewLine);
+                    return;
+                }
+
                 var court = courtList.FirstOrDefault(c => c.VenueName == cbbVenue.SelectedItem.ToString());
                 var startTime = timeList.FirstOrDefault(t => t.TimeStartName == cbbStartTime.Text);
-                await DoCreateOrder(txtCourtDate.Text.Trim(),court.SysID,startTime.StartTime);
+                await DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime);
             }
             catch (Exception exception)
             {
                 txtLog.AppendText(exception.Message + Environment.NewLine + exception.StackTrace + Environment.NewLine);
             }
 
-            btnCreateOrder.IsEnabled = true;
+            //btnCreateOrder.IsEnabled = true;
         }
 
         private async Task DoCreateOrder(string courtDate, string venueId, int startTime)
@@ -200,7 +206,7 @@ namespace JatyzxBooking
                 {
                     BillMoney = 35,//todo: get this from order status info
                     BillTime = 30,
-                    StartTime = startTime+i*30,
+                    StartTime = startTime + i * 30,
                     Venue = venueId
                 });
             }
@@ -314,10 +320,17 @@ namespace JatyzxBooking
                 dict.Add($"Details[{i}][BillMoney]", item.BillMoney.ToString());
             }
 
+            var stopwatch = new Stopwatch();
+            stopwatch.Start();
+
             var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, new Uri(uriCreateOrder))
             {
                 Content = new FormUrlEncodedContent(dict)
             });
+
+            stopwatch.Stop();
+            var ms = stopwatch.Elapsed.TotalMilliseconds;
+            txtLog.AppendText($"CreateOrder taken {ms} ms" + Environment.NewLine);
 
             txtLog.AppendText(response.StatusCode + Environment.NewLine);
 
@@ -386,7 +399,12 @@ namespace JatyzxBooking
             {
                 Content = new FormUrlEncodedContent(dict)
             });
+
+            txtLog.AppendText(response.StatusCode + Environment.NewLine);
+
             var s = await response.Content.ReadAsStringAsync();
+
+            txtLog.AppendText(s + Environment.NewLine);
 
             var result = JsonSerializer.Deserialize<Result>(s);
             return result.code == "0" && result.msg == "success";
@@ -434,6 +452,11 @@ namespace JatyzxBooking
         private void txtCourtDate_TextChanged(object sender, TextChangedEventArgs e)
         {
             //calCourtDate.Visibility = Visibility.Visible;
+        }
+
+        private void btnClearLog_Click(object sender, RoutedEventArgs e)
+        {
+            txtLog.Clear();
         }
     }
 
