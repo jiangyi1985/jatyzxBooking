@@ -102,7 +102,7 @@ namespace JatyzxBooking
             txtLog.AppendText(Environment.NewLine);
         }
 
-        private async void Button_Click(object sender, RoutedEventArgs e)
+        private async void btnGetCourtStatus_Click(object sender, RoutedEventArgs e)
         {
             btnGetCourtStatus.IsEnabled = false;
 
@@ -120,8 +120,9 @@ namespace JatyzxBooking
 
         private async Task DoGetCourtStatus(string courtDate = null)
         {
-            if (!client.DefaultRequestHeaders.Contains("Cookie"))
-                client.DefaultRequestHeaders.Add("Cookie", txtCookie.Text.Trim());
+            if (client.DefaultRequestHeaders.Contains("Cookie"))
+                client.DefaultRequestHeaders.Remove("Cookie");
+            client.DefaultRequestHeaders.Add("Cookie", txtCookie.Text.Trim());
 
             if (string.IsNullOrEmpty(courtDate))
             {
@@ -146,7 +147,7 @@ namespace JatyzxBooking
             }
         }
 
-        private async void Button_Click_1(object sender, RoutedEventArgs e)
+        private async void btnCreateOrder_Click(object sender, RoutedEventArgs e)
         {
             //btnCreateOrder.IsEnabled = false;
 
@@ -160,7 +161,8 @@ namespace JatyzxBooking
 
                 var court = courtList.FirstOrDefault(c => c.VenueName == cbbVenue.SelectedItem.ToString());
                 var startTime = timeList.FirstOrDefault(t => t.TimeStartName == cbbStartTime.Text);
-                await DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime);
+                int? retryDuration = chbRetry.IsChecked.Value ? Int32.Parse(txtRetryDuration.Text) : null;
+                await DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration);
             }
             catch (Exception exception)
             {
@@ -170,10 +172,11 @@ namespace JatyzxBooking
             //btnCreateOrder.IsEnabled = true;
         }
 
-        private async Task DoCreateOrder(string courtDate, string venueId, int startTime)
+        private async Task DoCreateOrder(string courtDate, string venueId, int startTime, int? retryDuration)
         {
-            if (!client.DefaultRequestHeaders.Contains("Cookie"))
-                client.DefaultRequestHeaders.Add("Cookie", txtCookie.Text.Trim());
+            if (client.DefaultRequestHeaders.Contains("Cookie"))
+                client.DefaultRequestHeaders.Remove("Cookie");
+            client.DefaultRequestHeaders.Add("Cookie", txtCookie.Text.Trim());
 
             //var orderId = await CreateOrder("2021-08-09", new List<BookItemDto>()
             //{
@@ -211,7 +214,22 @@ namespace JatyzxBooking
                 });
             }
 
+            var dtStart = DateTime.Now;
+
             var orderId = await CreateOrder(courtDate, bookItemList);
+
+            if (orderId == null && retryDuration.HasValue)//keep retrying on request fail
+            {
+                var dtUntil = dtStart.AddSeconds(retryDuration.Value);
+                var sequence = 1;
+                while (DateTime.Now <= dtUntil)
+                {
+                    txtLog.AppendText($"starting retry number {sequence}...");
+                    orderId = await CreateOrder(courtDate, bookItemList);
+                    if (orderId != null) break;
+                    sequence++;
+                }
+            }
 
             if (orderId != null)
             {
@@ -431,7 +449,7 @@ namespace JatyzxBooking
             calCourtDate.Visibility = Visibility.Hidden;
         }
 
-        private async void Button_Click_3(object sender, RoutedEventArgs e)
+        private async void btnLoadDefinition_Click(object sender, RoutedEventArgs e)
         {
             await LoadCourtDefinition();
 
