@@ -149,7 +149,10 @@ namespace JatyzxBooking
 
         private async void btnCreateOrder_Click(object sender, RoutedEventArgs e)
         {
-            //btnCreateOrder.IsEnabled = false;
+            int? retryDuration = chbRetry.IsChecked.Value ? Int32.Parse(txtRetryDuration.Text) : null;
+
+            if (retryDuration.HasValue)//in retry mode, button spam-clicking is not allowed
+                btnCreateOrder.IsEnabled = false;
 
             try
             {
@@ -161,7 +164,6 @@ namespace JatyzxBooking
 
                 var court = courtList.FirstOrDefault(c => c.VenueName == cbbVenue.SelectedItem.ToString());
                 var startTime = timeList.FirstOrDefault(t => t.TimeStartName == cbbStartTime.Text);
-                int? retryDuration = chbRetry.IsChecked.Value ? Int32.Parse(txtRetryDuration.Text) : null;
                 await DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration);
             }
             catch (Exception exception)
@@ -169,7 +171,8 @@ namespace JatyzxBooking
                 txtLog.AppendText(exception.Message + Environment.NewLine + exception.StackTrace + Environment.NewLine);
             }
 
-            //btnCreateOrder.IsEnabled = true;
+            if (!btnCreateOrder.IsEnabled)
+                btnCreateOrder.IsEnabled = true;
         }
 
         private async Task DoCreateOrder(string courtDate, string venueId, int startTime, int? retryDuration)
