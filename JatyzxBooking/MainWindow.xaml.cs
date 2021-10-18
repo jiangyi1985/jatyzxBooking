@@ -29,6 +29,7 @@ namespace JatyzxBooking
     public partial class MainWindow : Window
     {
         private const string ASPNETCOOKIE = "ASP.NET_SessionId=xxxxxxxxxxxxxxxxxxxxxx";
+        private const string LONG_TIME_MASK = "HH:mm:ss.ffffff";
 
         //https://developers.weixin.qq.com/doc/offiaccount/OA_Web_Apps/Wechat_webpage_authorization.html
         private const string appid = "wx1d9019feb23fe2d1";
@@ -164,7 +165,7 @@ namespace JatyzxBooking
 
                 var court = courtList.FirstOrDefault(c => c.VenueName == cbbVenue.SelectedItem.ToString());
                 var startTime = timeList.FirstOrDefault(t => t.TimeStartName == cbbStartTime.Text);
-                await DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration);
+                await DoCreateOrderAsync(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration);
             }
             catch (Exception exception)
             {
@@ -175,7 +176,35 @@ namespace JatyzxBooking
                 btnCreateOrder.IsEnabled = true;
         }
 
-        private async Task DoCreateOrder(string courtDate, string venueId, int startTime, int? retryDuration)
+        private void Button_Click(object sender, RoutedEventArgs e)
+        {
+            int? retryDuration = chbRetry.IsChecked.Value ? Int32.Parse(txtRetryDuration.Text) : null;
+            int? contantDelayMs = Int32.Parse(txtConstantDelay.Text);
+
+            btnCreateOrderNoWait.IsEnabled = false;
+
+            try
+            {
+                if (cbbVenue.SelectedItem == null || cbbStartTime.SelectedItem == null)
+                {
+                    txtLog.AppendText("Please select a court and a time" + Environment.NewLine);
+                    return;
+                }
+
+                var court = courtList.FirstOrDefault(c => c.VenueName == cbbVenue.SelectedItem.ToString());
+                var startTime = timeList.FirstOrDefault(t => t.TimeStartName == cbbStartTime.Text);
+
+                DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration, contantDelayMs);
+            }
+            catch (Exception exception)
+            {
+                txtLog.AppendText(exception.Message + Environment.NewLine + exception.StackTrace + Environment.NewLine);
+            }
+
+            //btnCreateOrderNoWait.IsEnabled = true;
+        }
+
+        private async Task DoCreateOrderAsync(string courtDate, string venueId, int startTime, int? retryDuration)
         {
             if (client.DefaultRequestHeaders.Contains("Cookie"))
                 client.DefaultRequestHeaders.Remove("Cookie");
@@ -217,36 +246,129 @@ namespace JatyzxBooking
                 });
             }
 
-            var dtStart = DateTime.Now;
+            string orderId = null;
 
-            var orderId = await CreateOrder(courtDate, bookItemList);
-
-            if (orderId == null && retryDuration.HasValue)//keep retrying on request fail
+            if (retryDuration.HasValue) //retry mode
             {
-                var dtUntil = dtStart.AddSeconds(retryDuration.Value);
-                var sequence = 1;
-                while (DateTime.Now <= dtUntil)
+
+                var dtStart = DateTime.Now;
+                orderId = await CreateOrderAsync(courtDate, bookItemList);
+
+                if (orderId == null && retryDuration.HasValue) //keep retrying on request fail
                 {
-                    txtLog.AppendText($"starting retry number {sequence}...");
-                    orderId = await CreateOrder(courtDate, bookItemList);
-                    if (orderId != null) break;
-                    sequence++;
+                    var dtUntil = dtStart.AddSeconds(retryDuration.Value);
+                    var sequence = 1;
+                    while (DateTime.Now <= dtUntil)
+                    {
+                        LogLine($"starting retry number {sequence}...");
+                        orderId = await CreateOrderAsync(courtDate, bookItemList);
+                        if (orderId != null) break;
+                        sequence++;
+                    }
                 }
+
+            }
+            else //one time mode
+            {
+                orderId = await CreateOrderAsync(courtDate, bookItemList);
             }
 
             if (orderId != null)
             {
-                var orderInfo = await GetOrderInfo(orderId);
+                var orderInfo = await GetOrderInfoAsync(orderId);
 
-                var walletInfo = await GetMyWalletInfo(orderId);
+                var walletInfo = await GetMyWalletInfoAsync(orderId);
 
-                var success = await ConfirmOrder(orderId, walletInfo.Details.FirstOrDefault().SysApp,
+                var success = await ConfirmOrderAsync(orderId, walletInfo.Details.FirstOrDefault().SysApp,
                     (int)orderInfo.PayMoney);
             }
         }
 
+        private void DoCreateOrder(string courtDate, string venueId, int startTime, int? retryDuration, int? constantDelayMs)
+        {
+            if (client.DefaultRequestHeaders.Contains("Cookie"))
+                client.DefaultRequestHeaders.Remove("Cookie");
+            client.DefaultRequestHeaders.Add("Cookie", txtCookie.Text.Trim());
+
+            var bookItemList = new List<BookItemDto>();
+            for (int i = 0; i < 4; i++)
+            {
+                bookItemList.Add(new BookItemDto()
+                {
+                    BillMoney = 35,//todo: get this from order status info
+                    BillTime = 30,
+                    StartTime = startTime + i * 30,
+                    Venue = venueId
+                });
+            }
+
+            if (retryDuration.HasValue) //sequentially retry: wait for response and retry with no delay
+            {
+                Task.Run(() => {
+                    var dtStart = DateTime.Now;
+                    var dtUntil = dtStart.AddSeconds(retryDuration.Value);
+                    var sequence = 1;
+                    var tasks = new List<Task<string>>();
+                    while (DateTime.Now <= dtUntil)
+                    {
+                        LogLineInDispatcher($"starting task {sequence}...");
+                        tasks.Add(Task.Run(() => CreateOrder(courtDate, bookItemList)));
+                        sequence++;
+                        Thread.Sleep(constantDelayMs.Value);
+                    }
+
+                    LogLineInDispatcher($"All {tasks.Count} task started. Waiting for all...");
+
+                    Task.WaitAll(tasks.ToArray());
+
+
+                    LogLineInDispatcher($"All tasks finished.");
+
+                    var tasksWithResult = tasks.Where(t => t.Result != null).ToList();
+
+                    LogLineInDispatcher($"{tasksWithResult.Count} task(s) has result.");
+                    foreach (var task in tasksWithResult)
+                    {
+                        LogLineInDispatcher($"{task.Result}");
+                    }
+
+                    if (tasksWithResult.Count>0)
+                    {
+                        var orderId = tasksWithResult.First().Result;
+
+                        var orderInfo = GetOrderInfo(orderId);
+
+                        var walletInfo = GetMyWalletInfo(orderId);
+
+                        var success =  ConfirmOrder(orderId, walletInfo.Details.FirstOrDefault().SysApp,
+                            (int)orderInfo.PayMoney);
+                    }
+
+                    Dispatcher.BeginInvoke(new Action(() => { btnCreateOrderNoWait.IsEnabled = true; }));
+
+                });
+                
+            }
+        }
+
+        private void LogLine(string text)
+        {
+            txtLog.AppendText("[" + Thread.CurrentThread.ManagedThreadId + "] " + DateTime.Now.ToString(LONG_TIME_MASK) + " " + text + Environment.NewLine);
+        }
+
+        private void LogLineInDispatcher(string text)
+        {
+            this.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                txtLog.AppendText("[" + Thread.CurrentThread.ManagedThreadId + "] " +
+                                  DateTime.Now.ToString(LONG_TIME_MASK) + " " + text + Environment.NewLine);
+            }));
+        }
+
         private void PrintCourtTable(List<CourtDto> courtList, List<TimeDto> timeList, List<CourseStatusDto> courtStatusList)
         {
+            if (courtStatusList == null) return;
+
             if (courtStatusList.Any(o => o.BillTime != 30))
             {
                 txtLog.AppendText("courtStatusList.Any(o => o.BillTime != 30)" + Environment.NewLine);
@@ -327,7 +449,7 @@ namespace JatyzxBooking
             return data == null ? null : JsonSerializer.Deserialize<List<CourseStatusDto>>(data);
         }
 
-        private async Task<string> CreateOrder(string dateString, List<BookItemDto> items)
+        private async Task<string> CreateOrderAsync(string dateString, List<BookItemDto> items)
         {
             var dict = new Dictionary<string, string>();
             dict.Add("VenueIcon", "131");
@@ -351,13 +473,16 @@ namespace JatyzxBooking
 
             stopwatch.Stop();
             var ms = stopwatch.Elapsed.TotalMilliseconds;
-            txtLog.AppendText($"CreateOrder taken {ms} ms" + Environment.NewLine);
+            LogLine($"CreateOrder taken {ms} ms");
 
-            txtLog.AppendText(response.StatusCode + Environment.NewLine);
+            LogLine(response.StatusCode.ToString());
 
             var s = await response.Content.ReadAsStringAsync();
 
-            txtLog.AppendText(s + Environment.NewLine);
+            if (s.Contains("<title>运行时错误</title>"))
+                LogLine(".NET运行时错误");
+            else
+                LogLine(s);
 
             if (response.StatusCode != HttpStatusCode.OK) return null;
 
@@ -365,7 +490,48 @@ namespace JatyzxBooking
             return data;
         }
 
-        private async Task<OrderInfoDto> GetOrderInfo(string orderId)
+        private string CreateOrder(string dateString, List<BookItemDto> items)
+        {
+            var dict = new Dictionary<string, string>();
+            dict.Add("VenueIcon", "131");
+            dict.Add("BillDay", dateString);
+            for (var i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                dict.Add($"Details[{i}][Venue]", item.Venue);
+                dict.Add($"Details[{i}][StartTime]", item.StartTime.ToString());
+                dict.Add($"Details[{i}][BillTime]", item.BillTime.ToString());
+                dict.Add($"Details[{i}][BillMoney]", item.BillMoney.ToString());
+            }
+
+            var stopwatch = new Stopwatch();
+            stopwatch.Start();
+
+            var response = client.Send(new HttpRequestMessage(HttpMethod.Post, new Uri(uriCreateOrder))
+            {
+                Content = new FormUrlEncodedContent(dict)
+            });
+
+            stopwatch.Stop();
+            var ms = stopwatch.Elapsed.TotalMilliseconds;
+            LogLineInDispatcher($"CreateOrder taken {ms} ms");
+
+            LogLineInDispatcher(response.StatusCode.ToString());
+
+            var s = response.Content.ReadAsStringAsync().Result;
+
+            if (s.Contains("<title>运行时错误</title>"))
+                LogLineInDispatcher(".NET运行时错误");
+            else
+                LogLineInDispatcher(s);
+
+            if (response.StatusCode != HttpStatusCode.OK) return null;
+
+            var data = JsonSerializer.Deserialize<Result>(s).data;
+            return data;
+        }
+
+        private async Task<OrderInfoDto> GetOrderInfoAsync(string orderId)
         {
             var dict = new Dictionary<string, string>();
             dict.Add("RecordNo", orderId);
@@ -387,7 +553,29 @@ namespace JatyzxBooking
             return data == null ? null : JsonSerializer.Deserialize<OrderInfoDto>(data);
         }
 
-        private async Task<WalletInfoDto> GetMyWalletInfo(string orderId)
+        private OrderInfoDto GetOrderInfo(string orderId)
+        {
+            var dict = new Dictionary<string, string>();
+            dict.Add("RecordNo", orderId);
+
+            var response = client.Send(new HttpRequestMessage(HttpMethod.Post, new Uri(uriGetOrderInfo))
+            {
+                Content = new FormUrlEncodedContent(dict)
+            });
+
+            LogLineInDispatcher(response.StatusCode + Environment.NewLine);
+
+            var s = response.Content.ReadAsStringAsync().Result;
+
+            LogLineInDispatcher(s + Environment.NewLine);
+
+            if (response.StatusCode != HttpStatusCode.OK) return null;
+
+            var data = JsonSerializer.Deserialize<Result>(s).data;
+            return data == null ? null : JsonSerializer.Deserialize<OrderInfoDto>(data);
+        }
+
+        private async Task<WalletInfoDto> GetMyWalletInfoAsync(string orderId)
         {
             var dict = new Dictionary<string, string>();
             dict.Add("RecordNo", orderId);//不传的话 server 5xx
@@ -409,7 +597,29 @@ namespace JatyzxBooking
             return data == null ? null : JsonSerializer.Deserialize<WalletInfoDto>(data);
         }
 
-        private async Task<bool> ConfirmOrder(string orderId, string walletItemId, int orderPrice)
+        private WalletInfoDto GetMyWalletInfo(string orderId)
+        {
+            var dict = new Dictionary<string, string>();
+            dict.Add("RecordNo", orderId);//不传的话 server 5xx
+
+            var response = client.Send(new HttpRequestMessage(HttpMethod.Post, new Uri(uriGetMyWalletInfo))
+            {
+                Content = new FormUrlEncodedContent(dict)
+            });
+
+            LogLineInDispatcher(response.StatusCode + Environment.NewLine);
+
+            var s =  response.Content.ReadAsStringAsync().Result;
+
+            LogLineInDispatcher(s + Environment.NewLine);
+
+            if (response.StatusCode != HttpStatusCode.OK) return null;
+
+            var data = JsonSerializer.Deserialize<Result>(s).data;
+            return data == null ? null : JsonSerializer.Deserialize<WalletInfoDto>(data);
+        }
+
+        private async Task<bool> ConfirmOrderAsync(string orderId, string walletItemId, int orderPrice)
         {
             var dict = new Dictionary<string, string>();
             dict.Add("RecordNo", orderId);//不传的话 server 5xx
@@ -426,6 +636,28 @@ namespace JatyzxBooking
             var s = await response.Content.ReadAsStringAsync();
 
             txtLog.AppendText(s + Environment.NewLine);
+
+            var result = JsonSerializer.Deserialize<Result>(s);
+            return result.code == "0" && result.msg == "success";
+        }
+
+        private bool ConfirmOrder(string orderId, string walletItemId, int orderPrice)
+        {
+            var dict = new Dictionary<string, string>();
+            dict.Add("RecordNo", orderId);//不传的话 server 5xx
+            dict.Add("SysApp", walletItemId);
+            dict.Add("BillValue", orderPrice.ToString());
+
+            var response =  client.Send(new HttpRequestMessage(HttpMethod.Post, new Uri(uriConfirmOrder))
+            {
+                Content = new FormUrlEncodedContent(dict)
+            });
+
+           LogLineInDispatcher(response.StatusCode + Environment.NewLine);
+
+            var s = response.Content.ReadAsStringAsync().Result;
+
+            LogLineInDispatcher(s + Environment.NewLine);
 
             var result = JsonSerializer.Deserialize<Result>(s);
             return result.code == "0" && result.msg == "success";
@@ -468,6 +700,7 @@ namespace JatyzxBooking
 
             btnGetCourtStatus.IsEnabled = true;
             btnCreateOrder.IsEnabled = true;
+            btnCreateOrderNoWait.IsEnabled = true;
         }
 
         private void txtCourtDate_TextChanged(object sender, TextChangedEventArgs e)
@@ -478,6 +711,16 @@ namespace JatyzxBooking
         private void btnClearLog_Click(object sender, RoutedEventArgs e)
         {
             txtLog.Clear();
+        }
+
+        private void chbRetry_Checked(object sender, RoutedEventArgs e)
+        {
+            //chbNoWait.IsEnabled = chbRetry.IsChecked == true;
+        }
+
+        private void chbRetry_Unchecked(object sender, RoutedEventArgs e)
+        {
+            //chbNoWait.IsEnabled = chbRetry.IsChecked == true;
         }
     }
 

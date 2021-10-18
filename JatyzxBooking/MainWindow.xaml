@@ -11,18 +11,22 @@
             <ColumnDefinition/>
         </Grid.ColumnDefinitions>
         <Button x:Name="btnGetCourtStatus" Content="Get Court Status" HorizontalAlignment="Left" Margin="280,57,0,0" VerticalAlignment="Top" Click="btnGetCourtStatus_Click" Height="20" Width="120" IsEnabled="False"/>
-        <TextBox x:Name="txtLog" Margin="10,141,10,10" TextWrapping="Wrap" FontFamily="Consolas" Background="Gainsboro" VerticalScrollBarVisibility="Auto"/>
-        <Button x:Name="btnCreateOrder" Content="Create Order &amp; Pay" HorizontalAlignment="Left" Margin="280,113,0,0" VerticalAlignment="Top" Click="btnCreateOrder_Click" Width="122" IsEnabled="False"/>
+        <TextBox x:Name="txtLog" Margin="10,172,10,10" TextWrapping="Wrap" FontFamily="Consolas" Background="Gainsboro" VerticalScrollBarVisibility="Auto"/>
+        <Button x:Name="btnCreateOrder" Content="Create Order &amp; Pay" HorizontalAlignment="Left" Margin="354,113,0,0" VerticalAlignment="Top" Click="btnCreateOrder_Click" Width="122" IsEnabled="False"/>
         <TextBox x:Name="txtCookie" HorizontalAlignment="Left" Margin="12,36,0,0" TextWrapping="Wrap" VerticalAlignment="Top" Width="390"/>
         <Calendar x:Name="calCourtDate" HorizontalAlignment="Left" Margin="542,37,0,0" VerticalAlignment="Top" Visibility="Hidden" DisplayDateChanged="calCourtDate_DisplayDateChanged" SelectedDatesChanged="calCourtDate_SelectedDatesChanged"/>
         <TextBox x:Name="txtCourtDate" HorizontalAlignment="Left" Margin="12,59,0,0" TextWrapping="Wrap" VerticalAlignment="Top" Width="120" MouseDoubleClick="txtCourtDate_MouseDoubleClick" TextChanged="txtCourtDate_TextChanged"/>
         <ComboBox x:Name="cbbVenue" HorizontalAlignment="Left" Margin="12,84,0,0" VerticalAlignment="Top" Width="120"/>
         <ComboBox x:Name="cbbStartTime" HorizontalAlignment="Left" Margin="137,84,0,0" VerticalAlignment="Top" Width="120"/>
         <Button x:Name="btnLoadDefinition" Content="Load Court &amp; Time Definitions" HorizontalAlignment="Left" Margin="10,10,0,0" VerticalAlignment="Top" Width="185" Click="btnLoadDefinition_Click"/>
-        <Button x:Name="btnClearLog" Content="Clear Log" HorizontalAlignment="Left" Margin="522,10,0,0" VerticalAlignment="Top" Width="64" Click="btnClearLog_Click"/>
-        <CheckBox x:Name="chbRetry" Content="Keep Retry On Fail for" HorizontalAlignment="Left" Margin="12,115,0,0" VerticalAlignment="Top"/>
-        <TextBox x:Name="txtRetryDuration" HorizontalAlignment="Left" Margin="160,114,0,0" Text="10" TextWrapping="Wrap" VerticalAlignment="Top" Width="47" TextAlignment="Center"/>
-        <Label Content="Seconds" HorizontalAlignment="Left" Margin="219,110,0,0" VerticalAlignment="Top"/>
+        <Button x:Name="btnClearLog" Content="Clear Log" HorizontalAlignment="Left" Margin="600,10,0,0" VerticalAlignment="Top" Width="64" Click="btnClearLog_Click"/>
+        <CheckBox x:Name="chbRetry" Content="Keep Retry for" HorizontalAlignment="Left" Margin="12,115,0,0" VerticalAlignment="Top" Checked="chbRetry_Checked" Unchecked="chbRetry_Unchecked"/>
+        <TextBox x:Name="txtRetryDuration" HorizontalAlignment="Left" Margin="112,114,0,0" Text="5" TextWrapping="Wrap" VerticalAlignment="Top" Width="33" TextAlignment="Center"/>
+        <Label Content="Seconds" HorizontalAlignment="Left" Margin="150,110,0,0" VerticalAlignment="Top"/>
+        <TextBox x:Name="txtConstantDelay" HorizontalAlignment="Left" Margin="172,138,0,0" Text="3" TextWrapping="Wrap" VerticalAlignment="Top" Width="32" HorizontalContentAlignment="Center"/>
+        <Label Content="ms" HorizontalAlignment="Left" Margin="209,135,0,0" VerticalAlignment="Top"/>
+        <Button x:Name="btnCreateOrderNoWait" Content="Create Order &amp; Pay (No Waiting)" HorizontalAlignment="Left" Margin="354,139,0,0" VerticalAlignment="Top" Width="183" Click="Button_Click" IsEnabled="False"/>
+        <Label Content="Constant Sending Rate per" HorizontalAlignment="Left" Margin="12,135,0,0" VerticalAlignment="Top"/>
 
     </Grid>
 </Window>
