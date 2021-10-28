@@ -151,6 +151,7 @@ namespace JatyzxBooking
         private async void btnCreateOrder_Click(object sender, RoutedEventArgs e)
         {
             int? retryDuration = chbRetry.IsChecked.Value ? Int32.Parse(txtRetryDuration.Text) : null;
+            int? constantDelayMs = chbNoWait.IsChecked.Value ? Int32.Parse(txtConstantDelay.Text) : null;
 
             if (retryDuration.HasValue)//in retry mode, button spam-clicking is not allowed
                 btnCreateOrder.IsEnabled = false;
@@ -160,12 +161,13 @@ namespace JatyzxBooking
                 if (cbbVenue.SelectedItem == null || cbbStartTime.SelectedItem == null)
                 {
                     txtLog.AppendText("Please select a court and a time" + Environment.NewLine);
+                    btnCreateOrder.IsEnabled = true;
                     return;
                 }
 
                 var court = courtList.FirstOrDefault(c => c.VenueName == cbbVenue.SelectedItem.ToString());
                 var startTime = timeList.FirstOrDefault(t => t.TimeStartName == cbbStartTime.Text);
-                await DoCreateOrderAsync(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration);
+                await DoCreateOrderAsync(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration, constantDelayMs);
             }
             catch (Exception exception)
             {
@@ -176,10 +178,10 @@ namespace JatyzxBooking
                 btnCreateOrder.IsEnabled = true;
         }
 
-        private void Button_Click(object sender, RoutedEventArgs e)
+        private void btnCreateOrderNoWait_Click(object sender, RoutedEventArgs e)
         {
             int? retryDuration = chbRetry.IsChecked.Value ? Int32.Parse(txtRetryDuration.Text) : null;
-            int? contantDelayMs = Int32.Parse(txtConstantDelay.Text);
+            int? constantDelayMs = chbNoWait.IsChecked.Value ? Int32.Parse(txtConstantDelay.Text) : null;
 
             btnCreateOrderNoWait.IsEnabled = false;
 
@@ -188,13 +190,14 @@ namespace JatyzxBooking
                 if (cbbVenue.SelectedItem == null || cbbStartTime.SelectedItem == null)
                 {
                     txtLog.AppendText("Please select a court and a time" + Environment.NewLine);
+                    btnCreateOrderNoWait.IsEnabled = true;
                     return;
                 }
 
                 var court = courtList.FirstOrDefault(c => c.VenueName == cbbVenue.SelectedItem.ToString());
                 var startTime = timeList.FirstOrDefault(t => t.TimeStartName == cbbStartTime.Text);
 
-                DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration, contantDelayMs);
+                DoCreateOrder(txtCourtDate.Text.Trim(), court.SysID, startTime.StartTime, retryDuration, constantDelayMs);
             }
             catch (Exception exception)
             {
@@ -204,7 +207,7 @@ namespace JatyzxBooking
             //btnCreateOrderNoWait.IsEnabled = true;
         }
 
-        private async Task DoCreateOrderAsync(string courtDate, string venueId, int startTime, int? retryDuration)
+        private async Task DoCreateOrderAsync(string courtDate, string venueId, int startTime, int? retryDuration, int? constantDelayMs)
         {
             if (client.DefaultRequestHeaders.Contains("Cookie"))
                 client.DefaultRequestHeaders.Remove("Cookie");
@@ -250,20 +253,63 @@ namespace JatyzxBooking
 
             if (retryDuration.HasValue) //retry mode
             {
-
-                var dtStart = DateTime.Now;
-                orderId = await CreateOrderAsync(courtDate, bookItemList);
-
-                if (orderId == null && retryDuration.HasValue) //keep retrying on request fail
+                if (constantDelayMs.HasValue) //constant sending rate, no waiting
                 {
-                    var dtUntil = dtStart.AddSeconds(retryDuration.Value);
+                    //in async mode, the less logging to UI the better
+
+                    var sw = new Stopwatch();
+                    int durationMs = retryDuration.Value * 1000;
+                    int delayMs = constantDelayMs.Value;
                     var sequence = 1;
-                    while (DateTime.Now <= dtUntil)
+                    var tasks = new List<Task<string>>();
+
+                    LogLine($"Starting tasks in async mode...");
+
+                    sw.Start();
+                    while (sw.ElapsedMilliseconds <= durationMs)
                     {
-                        LogLine($"starting retry number {sequence}...");
-                        orderId = await CreateOrderAsync(courtDate, bookItemList);
-                        if (orderId != null) break;
+                        //LogLine($"starting task {sequence}...");
+                        var task = CreateOrderAsync(courtDate, bookItemList, false);
+                        tasks.Add(task);
+
+                        var shouldDelay = delayMs * sequence - (int)sw.ElapsedMilliseconds;
+                        //LogLine($"{shouldDelay}");
+                        await Task.Delay(shouldDelay < 0 ? 0 : shouldDelay);
+
                         sequence++;
+                    }
+                    sw.Stop();
+
+                    LogLine($"All {tasks.Count} task started. Waiting for all...");
+
+                    await Task.WhenAll(tasks.ToArray());
+
+                    LogLine($"All tasks finished.");
+
+                    var tasksWithResult = tasks.Where(t => t.Result != null).ToList();
+
+                    LogLine($"{tasksWithResult.Count} task(s) has result.");
+                    foreach (var task in tasksWithResult)
+                    {
+                        LogLine($"{task.Result}");
+                    }
+                }
+                else
+                {
+                    var dtStart = DateTime.Now;
+                    orderId = await CreateOrderAsync(courtDate, bookItemList);
+
+                    if (orderId == null && retryDuration.HasValue) //keep retrying on request fail
+                    {
+                        var dtUntil = dtStart.AddSeconds(retryDuration.Value);
+                        var sequence = 1;
+                        while (DateTime.Now <= dtUntil)
+                        {
+                            LogLine($"starting retry number {sequence}...");
+                            orderId = await CreateOrderAsync(courtDate, bookItemList);
+                            if (orderId != null) break;
+                            sequence++;
+                        }
                     }
                 }
 
@@ -286,6 +332,9 @@ namespace JatyzxBooking
 
         private void DoCreateOrder(string courtDate, string venueId, int startTime, int? retryDuration, int? constantDelayMs)
         {
+            //without this, .net will create new threads gradually, at first there won't be enough threads available
+            System.Threading.ThreadPool.SetMinThreads(1000, 1000);
+
             if (client.DefaultRequestHeaders.Contains("Cookie"))
                 client.DefaultRequestHeaders.Remove("Cookie");
             client.DefaultRequestHeaders.Add("Cookie", txtCookie.Text.Trim());
@@ -302,25 +351,39 @@ namespace JatyzxBooking
                 });
             }
 
-            if (retryDuration.HasValue) //sequentially retry: wait for response and retry with no delay
+            if (retryDuration.HasValue && constantDelayMs.HasValue) //sequentially retry: wait for response and retry with no delay
             {
-                Task.Run(() => {
-                    var dtStart = DateTime.Now;
-                    var dtUntil = dtStart.AddSeconds(retryDuration.Value);
+                Task.Run(() =>
+                {
+                    //in multi-threading mode, logging to UI will be queued in dispatcher.
+                    //But when there are too many threads running UI might still be frozen
+                    //Also too many logs in dispatcher slows down program
+                    //TODO: build our own log queue and use that for logging
+
+                    var sw = new Stopwatch();
+                    int durationMs = retryDuration.Value * 1000;
+                    int delayMs = constantDelayMs.Value;
                     var sequence = 1;
                     var tasks = new List<Task<string>>();
-                    while (DateTime.Now <= dtUntil)
+
+                    LogLineInDispatcher($"Starting tasks in multi-threading mode...");
+
+                    sw.Start();
+                    while (sw.ElapsedMilliseconds <= durationMs)
                     {
-                        LogLineInDispatcher($"starting task {sequence}...");
-                        tasks.Add(Task.Run(() => CreateOrder(courtDate, bookItemList)));
+                        //LogLineInDispatcher($"starting task {sequence}...");
+                        tasks.Add(Task.Run(() => CreateOrder(courtDate, bookItemList,false)));
+
+                        var shouldDelay = delayMs * sequence - (int)sw.ElapsedMilliseconds;
+                        //LogLineInDispatcher($"{shouldDelay}");
+                        Thread.Sleep(shouldDelay < 0 ? 0 : shouldDelay);
+
                         sequence++;
-                        Thread.Sleep(constantDelayMs.Value);
                     }
 
                     LogLineInDispatcher($"All {tasks.Count} task started. Waiting for all...");
 
                     Task.WaitAll(tasks.ToArray());
-
 
                     LogLineInDispatcher($"All tasks finished.");
 
@@ -332,7 +395,7 @@ namespace JatyzxBooking
                         LogLineInDispatcher($"{task.Result}");
                     }
 
-                    if (tasksWithResult.Count>0)
+                    if (tasksWithResult.Count > 0)
                     {
                         var orderId = tasksWithResult.First().Result;
 
@@ -340,14 +403,16 @@ namespace JatyzxBooking
 
                         var walletInfo = GetMyWalletInfo(orderId);
 
-                        var success =  ConfirmOrder(orderId, walletInfo.Details.FirstOrDefault().SysApp,
+                        var success = ConfirmOrder(orderId, walletInfo.Details.FirstOrDefault().SysApp,
                             (int)orderInfo.PayMoney);
                     }
 
                     Dispatcher.BeginInvoke(new Action(() => { btnCreateOrderNoWait.IsEnabled = true; }));
-
                 });
-                
+            }
+            else
+            {
+                btnCreateOrderNoWait.IsEnabled = true;
             }
         }
 
@@ -358,10 +423,12 @@ namespace JatyzxBooking
 
         private void LogLineInDispatcher(string text)
         {
+            text = "[" + Thread.CurrentThread.ManagedThreadId + "] " +
+                   DateTime.Now.ToString(LONG_TIME_MASK) + " " + text;
+
             this.Dispatcher.BeginInvoke(new Action(() =>
             {
-                txtLog.AppendText("[" + Thread.CurrentThread.ManagedThreadId + "] " +
-                                  DateTime.Now.ToString(LONG_TIME_MASK) + " " + text + Environment.NewLine);
+                txtLog.AppendText(text + Environment.NewLine);
             }));
         }
 
@@ -449,7 +516,7 @@ namespace JatyzxBooking
             return data == null ? null : JsonSerializer.Deserialize<List<CourseStatusDto>>(data);
         }
 
-        private async Task<string> CreateOrderAsync(string dateString, List<BookItemDto> items)
+        private async Task<string> CreateOrderAsync(string dateString, List<BookItemDto> items, bool logging = true)
         {
             var dict = new Dictionary<string, string>();
             dict.Add("VenueIcon", "131");
@@ -470,19 +537,25 @@ namespace JatyzxBooking
             {
                 Content = new FormUrlEncodedContent(dict)
             });
+            //var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Get, new Uri("http://localhost:5000/v2/misc/sleep"))
+            //{
+            //});
 
             stopwatch.Stop();
             var ms = stopwatch.Elapsed.TotalMilliseconds;
-            LogLine($"CreateOrder taken {ms} ms");
+            if (logging) LogLine($"CreateOrder taken {ms} ms");
 
-            LogLine(response.StatusCode.ToString());
+            if (logging) LogLine(response.StatusCode.ToString());
 
             var s = await response.Content.ReadAsStringAsync();
 
-            if (s.Contains("<title>运行时错误</title>"))
-                LogLine(".NET运行时错误");
-            else
-                LogLine(s);
+            if (logging)
+            {
+                if (s.Contains("<title>运行时错误</title>"))
+                    LogLine(".NET运行时错误");
+                else
+                    LogLine(s);
+            }
 
             if (response.StatusCode != HttpStatusCode.OK) return null;
 
@@ -490,7 +563,7 @@ namespace JatyzxBooking
             return data;
         }
 
-        private string CreateOrder(string dateString, List<BookItemDto> items)
+        private string CreateOrder(string dateString, List<BookItemDto> items,bool logging=true)
         {
             var dict = new Dictionary<string, string>();
             dict.Add("VenueIcon", "131");
@@ -511,19 +584,25 @@ namespace JatyzxBooking
             {
                 Content = new FormUrlEncodedContent(dict)
             });
+            //var response = client.Send(new HttpRequestMessage(HttpMethod.Get, new Uri("http://localhost:5000/v2/misc/sleep"))
+            //{
+            //});
 
             stopwatch.Stop();
             var ms = stopwatch.Elapsed.TotalMilliseconds;
-            LogLineInDispatcher($"CreateOrder taken {ms} ms");
+           if(logging) LogLineInDispatcher($"CreateOrder taken {ms} ms");
 
-            LogLineInDispatcher(response.StatusCode.ToString());
+           if (logging) LogLineInDispatcher(response.StatusCode.ToString());
 
             var s = response.Content.ReadAsStringAsync().Result;
 
-            if (s.Contains("<title>运行时错误</title>"))
-                LogLineInDispatcher(".NET运行时错误");
-            else
-                LogLineInDispatcher(s);
+            if (logging)
+            {
+                if (s.Contains("<title>运行时错误</title>"))
+                    LogLineInDispatcher(".NET运行时错误");
+                else
+                    LogLineInDispatcher(s);
+            }
 
             if (response.StatusCode != HttpStatusCode.OK) return null;
 
@@ -609,7 +688,7 @@ namespace JatyzxBooking
 
             LogLineInDispatcher(response.StatusCode + Environment.NewLine);
 
-            var s =  response.Content.ReadAsStringAsync().Result;
+            var s = response.Content.ReadAsStringAsync().Result;
 
             LogLineInDispatcher(s + Environment.NewLine);
 
@@ -648,12 +727,12 @@ namespace JatyzxBooking
             dict.Add("SysApp", walletItemId);
             dict.Add("BillValue", orderPrice.ToString());
 
-            var response =  client.Send(new HttpRequestMessage(HttpMethod.Post, new Uri(uriConfirmOrder))
+            var response = client.Send(new HttpRequestMessage(HttpMethod.Post, new Uri(uriConfirmOrder))
             {
                 Content = new FormUrlEncodedContent(dict)
             });
 
-           LogLineInDispatcher(response.StatusCode + Environment.NewLine);
+            LogLineInDispatcher(response.StatusCode + Environment.NewLine);
 
             var s = response.Content.ReadAsStringAsync().Result;
 
@@ -713,14 +792,21 @@ namespace JatyzxBooking
             txtLog.Clear();
         }
 
-        private void chbRetry_Checked(object sender, RoutedEventArgs e)
+        private void chbRetry_Unchecked(object sender, RoutedEventArgs e)
         {
             //chbNoWait.IsEnabled = chbRetry.IsChecked == true;
         }
 
-        private void chbRetry_Unchecked(object sender, RoutedEventArgs e)
+        private void chbRetry_Click(object sender, RoutedEventArgs e)
         {
-            //chbNoWait.IsEnabled = chbRetry.IsChecked == true;
+            chbNoWait.IsEnabled = chbRetry.IsChecked == true;
+            txtRetryDuration.IsEnabled = chbRetry.IsChecked == true;
+            txtConstantDelay.IsEnabled = chbRetry.IsChecked == true;
+        }
+
+        private void chbNoWait_Click(object sender, RoutedEventArgs e)
+        {
+            txtConstantDelay.IsEnabled = chbNoWait.IsChecked == true;
         }
     }
 
